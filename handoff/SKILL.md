@@ -56,11 +56,23 @@ Separate uncommitted changes, committed-but-unpushed changes, and stashed change
 Ordered by priority. Each item states the concrete next action (which file to edit, which command to run) — never something unexecutable like "keep optimizing." Note where any known blocker sits.
 
 ### 3. 技術決策與注意事項 / Technical decisions & caveats
-只寫**新視窗看程式碼也看不出來的東西**：為什麼選 A 不選 B、已排除的方案與原因、
+只寫**新視窗看程式碼也看不出來的東西**：為什麼選 A 不選 B、
 命名規範、環境／金鑰限制、不能碰的檔案。
 程式碼本身已經寫明的結構不要重複。
 
-Only what a new window can't infer by reading the code: why A was chosen over B, options already ruled out and why, naming conventions, environment/credential constraints, files that must not be touched. Don't repeat structure the code already makes obvious.
+**已探索但放棄的路徑（踩坑紀錄）要單獨列一條、寫清楚**：試過的方案、
+為什麼放棄（報錯訊息、效能不夠、跟既有架構衝突……）、卡在哪一步。
+這是本段最容易漏掉、卻最能幫新視窗少走冤枉路的部分——沒有這段，
+新視窗很可能會重踩一次同樣的坑。
+
+Only what a new window can't infer by reading the code: why A was chosen over B,
+naming conventions, environment/credential constraints, files that must not be touched.
+Don't repeat structure the code already makes obvious.
+
+**Call out abandoned paths as their own line, in detail**: what was tried, why it was
+abandoned (error message, insufficient performance, conflict with existing architecture,
+etc.), and exactly where it got stuck. This is the part most likely to get skipped, yet
+the one that saves the new window from repeating the same dead end.
 
 ### 4. 建議的第一句 Prompt / Suggested first prompt
 一段可直接複製貼上的文字，內含：專案路徑、當前分支、要接續的第一件事。
