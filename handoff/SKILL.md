@@ -1,25 +1,32 @@
 ---
 name: handoff
-description: 產出交接摘要（Handoff Summary），供使用者關閉目前視窗、在新對話視窗延續開發。Produces a handoff summary so the user can close the current window and resume in a new session with zero memory of it. 觸發詞：交接、交接摘要、handoff、換視窗、開新視窗、開新對話、接手、上下文快要滿了、幫我總結目前進度、繼續後續開發 / Trigger words: handoff, context handoff, session summary, hand off to a new chat, continue in a new session, context window almost full. 輸出四段：已完成進度與檔案路徑、Next Steps、技術決策與注意事項、建議的第一句 Prompt。
+description: 產出交接摘要（Handoff Summary）或接續上一棒進度。供使用者關閉目前視窗、在新對話視窗延續開發。Produces or resumes a handoff summary so you can switch sessions cleanly without memory loss. 觸發詞：交接、交接摘要、handoff、換視窗、開新視窗、開新對話、接手、繼續開發、繼續 issue、接續 issue、上下文快要滿了、幫我總結目前進度 / Trigger words: handoff, resume, resume handoff, context handoff, session summary, continue in a new session, context window almost full. 支援產出四段式交接檔並自動登錄 Obsidian 待辦清單，以及依 issue 編號快速接續上一棒進度。
 license: MIT
-allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git stash list:*)
-argument-hint: "[output-file-path]"
+allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git stash list:*), Bash(python3 *handoff-manager.py*)
+argument-hint: "[resume <issue|branch> | list | complete | output-file-path]"
 metadata:
-  tags: "handoff, context, session, summary"
+  tags: "handoff, context, session, summary, resume, todo"
   category: "productivity"
 ---
 
 # handoff
 
-產出一份能讓「完全沒有本視窗記憶」的新 session 直接接手的摘要。
-Produces a summary that lets a brand-new session, with zero memory of this window, pick up the work directly.
+產出一份能讓「完全沒有本視窗記憶」的新 session 直接接手的摘要，或在新視窗接續上一棒的開發進度。
 
-## 先蒐證，再下筆（必做）／Gather evidence first, then write (mandatory)
+---
 
-動筆前一定先執行，不要憑對話印象寫路徑。
-Always run these before writing — never rely on memory of the conversation for paths or state.
+## 兩條核心運作路徑
 
-```
+1. **產出交接（Handoff 模式）**：使用者說「交接」「換視窗」「上下文快滿了」「總結進度」或輸入 `/handoff` 時執行。
+2. **接續交接（Resume 模式）**：使用者說「繼續 issue #xxx」「接手 issue #xxx」或輸入 `/handoff resume` 時執行。
+
+---
+
+## 模式一：產出交接（Handoff）
+
+### 1. 先蒐證，再下筆（必做）
+動筆前一定先執行，不要憑對話印象寫路徑：
+```bash
 git status --short --branch
 git diff --stat HEAD
 git log --oneline -10
@@ -27,67 +34,69 @@ git stash list
 ```
 
 - 檔案路徑一律用**專案根目錄的相對路徑**，且必須來自上面的輸出或本 session 實際讀寫過的檔案。
-  File paths must be relative to the project root, and must come from the output above or from files this session actually read/wrote.
 - 非上述來源的事項，標記 `(推測)` / `(unverified)`。寧可標推測，不可寫得像已驗證。
-  Anything not sourced this way must be flagged as unverified — prefer flagging over writing it as if confirmed.
-- 不在 git repo 就跳過上面的指令，改用本 session 實際碰過的絕對路徑，並把「已完成進度」整段標記為 `(推測)`——因為沒有 git 可以交叉比對。
-  Not in a git repo → skip the commands above, use absolute paths this session actually touched, and flag the entire "Completed work" section as unverified, since none of it could be cross-checked against git.
-- `git stash list` 有內容的話，把 stash 裡的未提交工作獨立列一條，不要跟工作區的未提交變更混在一起。
-  If `git stash list` returns entries, list stashed work as its own line, separate from working-tree uncommitted changes.
+- 不在 git repo 就跳過上面的指令，改用本 session 實際碰過的絕對路徑，並把「已完成進度」整段標記為 `(推測)`。
+- `git stash list` 有內容的話，把 stash 裡的未提交工作獨立列一條。
 
-## 輸出語言／Output language
+### 2. 內部組織四段式交接內容（存檔用）
+在記憶體中整理出完整的四段式架構：
+1. **已完成進度**：逐項條列「做了什麼 → 動到哪些檔案（相對路徑）」，分開已提交 / 未提交 / stash。
+2. **Next Steps**：依優先序排列，每項必須是具體可執行的動作（哪個檔案、什麼指令），註明 blocker。
+3. **技術決策與注意事項**：只寫程式碼看不出來的事情（架構選擇、限制、不能動的檔案），**必寫「已探索但放棄的路徑（踩坑紀錄）」**。
+4. **建議的第一句 Prompt**：包含專案路徑、當前分支、要接續的第一件事。
 
-跟隨對話目前使用的語言。段落標題與結構不因語言而變。
-Match the language the user has been using in this conversation. Keep section headers and structure identical regardless of language.
+### 3. 自動存檔與 Obsidian 待辦登記（必做）
+將上述四段內容寫入臨時檔案（如 `/tmp/current-handoff.md`），調用腳本存檔：
+```bash
+python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" record /tmp/current-handoff.md
+```
+- **專案與分支隔離**：自動存入 `~/.claude/handoffs/${REPO}__${BRANCH}.md`，多專案/多分支絕不互相覆蓋。
+- **Obsidian 待辦清單**：若使用者本機存在 `~/Documents/obsidian-vault/Todo/待辦清單.md`，腳本會自動在清單頂端新增一行：
+  `- [ ] issue #<num> handoff (<next-step-summary>)`
+  讓使用者在手機或 Obsidian 一眼就能掌握有哪些任務換手中。
+- 若使用者調用時帶有指定路徑參數（`$ARGUMENTS`），額外複製一份至該路徑。
+- 存檔完成後清理臨時檔（`rm -f /tmp/current-handoff.md`）。
 
-## 輸出格式（固定四段）／Output format (four fixed sections)
+### 4. 對話框極簡回報（省 Token 原則）
+> [!IMPORTANT]
+> **不要在對話框中印出冗長的四段式交接內容！**
+> 因為內容已完整存檔至本機與 Obsidian，使用者即將關閉視窗，印出長篇大論純粹浪費輸出 Token。
+> 對話框**只輸出極簡回報**（4 行以內）：
 
-### 1. 已完成進度 / Completed work
-逐項條列「做了什麼 → 動到哪些檔案」，檔案路徑用行內程式碼。
-未提交 / 已提交未推送 / stash 裡的變更要分開講清楚（分支與 ahead/behind 狀態來自 `git status --short --branch` 第一行）。
+```text
+已完成交接存檔與 Obsidian 待辦登記！
+• 交接檔案：~/.claude/handoffs/<repo>__<branch>.md
+• 下一步驟：<Next Step 1 一句話>
+• Obsidian：已新增至待辦清單
 
-Bullet list of "what was done → which files were touched", file paths in inline code.
-Separate uncommitted changes, committed-but-unpushed changes, and stashed changes (branch and ahead/behind status comes from the first line of `git status --short --branch`).
+您可直接關閉此視窗。新視窗開啟後輸入「繼續 issue #<num>」即可接手！
+```
 
-### 2. Next Steps
-依優先序排列，每項寫明**下一步的具體動作**（要改哪個檔案、要跑哪個指令），
-不要寫「繼續優化」這種無法執行的句子。已知卡住的點要寫出卡在哪。
+---
 
-Ordered by priority. Each item states the concrete next action (which file to edit, which command to run) — never something unexecutable like "keep optimizing." Note where any known blocker sits.
+## 模式二：接續上一棒（Resume）
 
-### 3. 技術決策與注意事項 / Technical decisions & caveats
-只寫**新視窗看程式碼也看不出來的東西**：為什麼選 A 不選 B、
-命名規範、環境／金鑰限制、不能碰的檔案。
-程式碼本身已經寫明的結構不要重複。
+當使用者說「繼續 issue #xxx」、「接手 issue #xxx」、「做這個 handoff」或輸入 `/handoff resume [query]` 時：
 
-**已探索但放棄的路徑（踩坑紀錄）要單獨列一條、寫清楚**：試過的方案、
-為什麼放棄（報錯訊息、效能不夠、跟既有架構衝突……）、卡在哪一步。
-這是本段最容易漏掉、卻最能幫新視窗少走冤枉路的部分——沒有這段，
-新視窗很可能會重踩一次同樣的坑。
+1. **讀取交接內容**：
+   執行腳本取得對應交接檔案：
+   ```bash
+   python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" resume [query]
+   ```
+   （若沒帶參數，腳本會自動依當前專案與分支智慧尋找）。
 
-Only what a new window can't infer by reading the code: why A was chosen over B,
-naming conventions, environment/credential constraints, files that must not be touched.
-Don't repeat structure the code already makes obvious.
+2. **主動回報並接續**：
+   - 以繁體中文向使用者回報：「已為您載入 issue #xxx 的交接紀錄。」
+   - 簡潔摘要：目前已完成項目、已排除的踩坑方案、以及 **Next Steps 的第一個具體動作**。
+   - 詢問使用者是否直接開始執行，或有其他指示。
 
-**Call out abandoned paths as their own line, in detail**: what was tried, why it was
-abandoned (error message, insufficient performance, conflict with existing architecture,
-etc.), and exactly where it got stuck. This is the part most likely to get skipped, yet
-the one that saves the new window from repeating the same dead end.
+---
 
-### 4. 建議的第一句 Prompt / Suggested first prompt
-一段可直接複製貼上的文字，內含：專案路徑、當前分支、要接續的第一件事。
-放在獨立的程式碼區塊裡。
+## 模式三：任務完成清理（Complete）
 
-A copy-pasteable block containing: project path, current branch, and the first thing to pick up. Put it in its own code block.
-
-## 篇幅／Length
-
-全長控制在一頁內。這是交接，不是報告；寫不完的細節留給新視窗自己讀程式碼。
-Keep the whole thing to one page. This is a handoff, not a report — leave detail for the new window to get by reading the code itself.
-
-## 選用：存成檔案／Optional: save to a file
-
-如果呼叫時帶了路徑參數（`$ARGUMENTS`），除了輸出到對話框外，也把摘要寫進該檔案，這樣關掉視窗後內容還在。
-沒帶參數時只輸出到對話框，不主動寫進使用者的專案。
-
-If invoked with a path argument (`$ARGUMENTS`), also write the summary to that file in addition to printing it in the chat, so it survives closing the window. Without an argument, only print it in the chat — don't write into the user's project uninvited.
+當該交接任務實作完成並開啟 PR（`gh pr create`）或使用者明確指示「完成了」時：
+```bash
+python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" complete [query]
+```
+- 自動清理 `~/.claude/handoffs/` 對應的交接檔案。
+- 自動將 Obsidian `Todo/待辦清單.md` 裡的該筆待辦標記為已完成（`- [x]`）。
