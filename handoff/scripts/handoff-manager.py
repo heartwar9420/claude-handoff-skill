@@ -7,6 +7,7 @@ with seamless integration into Obsidian Todo/待辦清單.md.
 """
 
 import argparse
+import datetime
 import os
 import re
 import subprocess
@@ -15,6 +16,56 @@ from pathlib import Path
 
 DEFAULT_VAULT = Path.home() / "Documents" / "obsidian-vault"
 HANDOFF_DIR = Path.home() / ".claude" / "handoffs"
+
+
+def yaml_quote(text):
+    """Double-quote a string for use as a YAML frontmatter scalar value.
+
+    An unquoted value containing ' #' (whitespace then hash) gets silently
+    truncated by YAML parsers, which treat it as a comment start — e.g.
+    'issue #1334 handoff (...)' parses down to just 'issue'. Obsidian's own
+    frontmatter parser hits the same rule, so a bare title like that renders
+    wrong forever, not just once. Quoting sidesteps this (and ':', etc.).
+    """
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def slugify_for_filename(text):
+    """Make text safe as an Obsidian note filename.
+
+    '#' is replaced with '-' (not stripped) because '#' inside a [[wiki-link]]
+    is parsed by Obsidian as a heading reference, breaking the link. This
+    mirrors the convention already used elsewhere in this vault, e.g. an item
+    titled "...(#1289)" is filed as "...(-1289).md".
+    """
+    text = text.replace("#", "-")
+    for ch in '/\\:*?"<>|':
+        text = text.replace(ch, "")
+    return text.strip()
+
+
+def today_str():
+    return datetime.date.today().isoformat()
+
+
+def get_github_url(num):
+    """Best-effort GitHub issue/PR URL lookup via gh CLI. Returns "" on any failure
+    (gh not installed, not authenticated, offline, etc.) rather than raising."""
+    if not num:
+        return ""
+    try:
+        return (
+            subprocess.check_output(
+                ["gh", "issue", "view", str(num), "--json", "url", "-q", ".url"],
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            .decode("utf-8")
+            .strip()
+        )
+    except Exception:
+        return ""
 
 
 def get_git_info():
@@ -65,7 +116,7 @@ def extract_summary_from_content(content):
     """Attempt to extract a short next step summary from handoff content."""
     # Look for Next Steps section
     next_steps_m = re.search(
-        r"##\s*(?:2\.\s*)?Next\s*Steps\s*\n(.*?)(?=\n##|\Z)",
+        r"##\s*(?:2\.\s*)?(?:Next\s*Steps|下一步|Next\s*Step)[^\n]*\n(.*?)(?=\n##|\Z)",
         content,
         re.DOTALL | re.IGNORECASE,
     )
@@ -85,7 +136,7 @@ def extract_summary_from_content(content):
 
     # Fallback: check Suggested first prompt
     prompt_m = re.search(
-        r"##\s*(?:4\.\s*)?Suggested\s*first\s*prompt\s*\n.*?```(?:text)?\s*\n(.*?)\n```",
+        r"##\s*(?:4\.\s*)?(?:Suggested\s*first\s*prompt|建議的第一句\s*Prompt)[^\n]*\n.*?```(?:text)?\s*\n(.*?)\n```",
         content,
         re.DOTALL | re.IGNORECASE,
     )
@@ -132,17 +183,68 @@ def cmd_record(args):
 
     if todo_file.exists():
         try:
-            todo_content = todo_file.read_text(encoding="utf-8")
             if issue_num:
-                item_line = f"- [ ] issue #{issue_num} handoff ({summary})"
-                pattern = re.compile(
-                    rf"^[ \t]*- \[ \] issue #{issue_num} handoff.*$", re.MULTILINE
+                display_title = f"issue #{issue_num} handoff ({summary})"
+                note_stem = slugify_for_filename(f"issue #{issue_num} handoff")
+            else:
+                display_title = f"{branch} handoff ({summary})"
+                note_stem = slugify_for_filename(f"{branch} handoff")
+
+            # Write a real linked note (matching the vault's Todo/未完成 schema) instead of
+            # a bare-text checkbox line, otherwise the item has nothing to link to and can't
+            # be opened from Obsidian.
+            note_dir = vault_path / "Todo" / "未完成"
+            note_dir.mkdir(parents=True, exist_ok=True)
+            note_path = note_dir / f"{note_stem}.md"
+
+            if not note_path.exists():
+                # A note with this stem may already exist under Todo/已完成/<date>/ —
+                # e.g. a past handoff for the same issue number was already completed
+                # and moved out of Todo/未完成/. Reusing note_stem blindly would create
+                # a second, colliding file that the vault's own auto-move-done plugin
+                # can't relocate (destination name taken), leaving an orphan behind.
+                done_matches = list((vault_path / "Todo" / "已完成").glob(f"**/{note_stem}.md"))
+                if done_matches:
+                    note_stem = f"{note_stem} {datetime.datetime.now().strftime('%H%M%S')}"
+                    note_path = note_dir / f"{note_stem}.md"
+                    print(
+                        f"警告：{done_matches[0]} 已存在同名已完成筆記，"
+                        f"本次改建立為 {note_path.name} 避免撞名。",
+                        file=sys.stderr,
+                    )
+
+            if note_path.exists():
+                note_text = note_path.read_text(encoding="utf-8")
+                note_text = re.sub(
+                    r"^title:.*$", f"title: {yaml_quote(display_title)}", note_text, count=1, flags=re.MULTILINE
                 )
             else:
-                item_line = f"- [ ] {branch} handoff ({summary})"
-                pattern = re.compile(
-                    rf"^[ \t]*- \[ \] {re.escape(branch)} handoff.*$", re.MULTILINE
+                issue_link = get_github_url(issue_num) if issue_num else ""
+                note_text = (
+                    "---\n"
+                    f"title: {yaml_quote(display_title)}\n"
+                    "done_date:\n"
+                    "skills: []\n"
+                    "impact:\n"
+                    f"issue_link: {issue_link}\n"
+                    "pr_link:\n"
+                    "star: false\n"
+                    "---\n"
+                    "回待辦清單：[[待辦清單|待辦清單]]\n\n"
+                    "## 交接內容\n\n"
+                    f"{content}\n"
                 )
+            note_path.write_text(note_text, encoding="utf-8")
+
+            todo_content = todo_file.read_text(encoding="utf-8")
+            item_line = f"- [ ] [[{note_stem}|{display_title}]]"
+            # Match either an already-linked line from a previous run of this fixed version,
+            # or a legacy plain-text line left by the old (pre-fix) version of this script.
+            pattern = re.compile(
+                rf"^[ \t]*- \[ \] (?:\[\[{re.escape(note_stem)}[^\]]*\]\]|"
+                rf"{'issue #' + issue_num + ' handoff' if issue_num else re.escape(branch) + ' handoff'}.*)$",
+                re.MULTILINE,
+            )
 
             if pattern.search(todo_content):
                 new_todo = pattern.sub(item_line, todo_content, count=1)
@@ -158,6 +260,7 @@ def cmd_record(args):
                 print(f"已新增至 Obsidian 待辦清單：{item_line}")
 
             todo_file.write_text(new_todo, encoding="utf-8")
+            print(f"已建立/更新交接筆記：{note_path}")
         except Exception as e:
             print(f"警告：更新 Obsidian 待辦清單時發生錯誤：{e}", file=sys.stderr)
 
@@ -233,26 +336,50 @@ def cmd_complete(args):
     else:
         print("未發現需清理的交接檔案。")
 
-    # 2. Update Obsidian Todo/待辦清單.md
+    # 2. Mark the linked note's done_date, then drop its line from Todo/待辦清單.md —
+    # this mirrors what the vault's own auto-done-date plugin does when a box is checked
+    # by hand, and lets auto-move-done relocate the note into Todo/已完成/<date>/.
     vault_path = Path(args.vault) if args.vault else DEFAULT_VAULT
     todo_file = vault_path / "Todo" / "待辦清單.md"
 
     if todo_file.exists():
         try:
-            content = todo_file.read_text(encoding="utf-8")
             if issue_num:
-                pattern = re.compile(
-                    rf"^[ \t]*- \[ \] (issue #{issue_num} handoff.*)$", re.MULTILINE
-                )
+                note_stem = slugify_for_filename(f"issue #{issue_num} handoff")
             else:
-                pattern = re.compile(
-                    rf"^[ \t]*- \[ \] ({re.escape(query)} handoff.*)$", re.MULTILINE
+                note_stem = slugify_for_filename(f"{query} handoff")
+
+            note_candidates = list((vault_path / "Todo" / "未完成").glob(f"{note_stem}.md")) + list(
+                (vault_path / "Todo" / "已完成").glob(f"**/{note_stem}.md")
+            )
+            if note_candidates:
+                note_path = note_candidates[0]
+                note_text = note_path.read_text(encoding="utf-8")
+                if re.search(r"^done_date:\s*$", note_text, re.MULTILINE):
+                    note_text = re.sub(
+                        r"^done_date:\s*$", f"done_date: {today_str()}", note_text,
+                        count=1, flags=re.MULTILINE,
+                    )
+                    note_path.write_text(note_text, encoding="utf-8")
+                    print(f"已標記筆記完成日期：{note_path.name}")
+
+            content = todo_file.read_text(encoding="utf-8")
+            new_content = re.sub(
+                rf"^[ \t]*- \[ \] \[\[{re.escape(note_stem)}[^\]]*\]\]\n?",
+                "",
+                content,
+                flags=re.MULTILINE,
+            )
+            if new_content == content:
+                # Legacy plain-text line left by the old (pre-fix) version of this script.
+                legacy_text = f"issue #{issue_num} handoff" if issue_num else f"{re.escape(query)} handoff"
+                new_content = re.sub(
+                    rf"^[ \t]*- \[ \] {legacy_text}.*\n?", "", content, flags=re.MULTILINE
                 )
 
-            new_content = pattern.sub(r"- [x] \1", content)
             if new_content != content:
                 todo_file.write_text(new_content, encoding="utf-8")
-                print("已將 Obsidian 待辦清單中對應的 handoff 項目標記為已完成 (- [x])。")
+                print("已從 Obsidian 待辦清單移除對應的 handoff 項目（筆記已標記完成，交給 auto-move-done 外掛歸檔）。")
             else:
                 print("Obsidian 待辦清單中未找到對應的未完成 handoff 項目（或已是完成狀態）。")
         except Exception as e:

@@ -51,9 +51,9 @@ git stash list
 python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" record /tmp/current-handoff.md
 ```
 - **專案與分支隔離**：自動存入 `~/.claude/handoffs/${REPO}__${BRANCH}.md`，多專案/多分支絕不互相覆蓋。
-- **Obsidian 待辦清單**：若使用者本機存在 `~/Documents/obsidian-vault/Todo/待辦清單.md`，腳本會自動在清單頂端新增一行：
-  `- [ ] issue #<num> handoff (<next-step-summary>)`
-  讓使用者在手機或 Obsidian 一眼就能掌握有哪些任務換手中。
+- **Obsidian 待辦清單**：若使用者本機存在 `~/Documents/obsidian-vault/Todo/待辦清單.md`，腳本會依 vault 既有 schema 在 `Todo/未完成/` 建立一份對應筆記（`title`/`done_date`/`skills`/`impact`/`issue_link`/`pr_link`/`star` frontmatter，body 含完整四段式交接內容），並在待辦清單頂端插入一行**連結**該筆記的 checkbox：
+  `- [ ] [[issue -<num> handoff|issue #<num> handoff (<next-step-summary>)]]`
+  （筆記檔名把 `#` 換成 `-`，因為 `#` 在 `[[wiki-link]]` 裡會被解讀成標題錨點，這點跟 vault 裡其他手動建的筆記檔名慣例一致。）純文字、沒有連結目標的行在 Obsidian 裡點不開，因此這裡務必是連結而非純文字。讓使用者在手機或 Obsidian 一眼就能掌握有哪些任務換手中，並點進去看完整內容。
 - 若使用者調用時帶有指定路徑參數（`$ARGUMENTS`），額外複製一份至該路徑。
 - 存檔完成後清理臨時檔（`rm -f /tmp/current-handoff.md`）。
 
@@ -99,4 +99,4 @@ python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" record /tmp/cu
 python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" complete [query]
 ```
 - 自動清理 `~/.claude/handoffs/` 對應的交接檔案。
-- 自動將 Obsidian `Todo/待辦清單.md` 裡的該筆待辦標記為已完成（`- [x]`）。
+- 幫對應的 Obsidian 筆記補上 `done_date`，並把 `Todo/待辦清單.md` 裡連到它的那行整行移除——交給 vault 既有的 `auto-move-done` 外掛依 `done_date` 自動把筆記搬進 `Todo/已完成/<日期>/`，跟其他任務走同一套歸檔機制，不再是留一個打勾但點不開的純文字行。
