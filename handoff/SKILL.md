@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: 產出交接摘要（Handoff Summary）或接續上一棒進度。供使用者關閉目前視窗、在新對話視窗延續開發。Produces or resumes a handoff summary so you can switch sessions cleanly without memory loss. 觸發詞：交接、交接摘要、handoff、換視窗、開新視窗、開新對話、接手、繼續開發、繼續 issue、接續 issue、上下文快要滿了、幫我總結目前進度 / Trigger words: handoff, resume, resume handoff, context handoff, session summary, continue in a new session, context window almost full. 支援產出四段式交接檔並自動登錄 Obsidian 待辦清單，以及依 issue 編號快速接續上一棒進度。
+description: 產出交接摘要（Handoff Summary）或接續上一棒進度。供使用者關閉目前視窗、在新對話視窗延續開發。Produces or resumes a handoff summary so you can switch sessions cleanly without memory loss. 觸發詞：交接、交接摘要、handoff、換視窗、開新視窗、開新對話、上下文快要滿了、幫我總結目前進度 / Trigger words: handoff, resume, resume handoff, context handoff, session summary, continue in a new session, context window almost full. 支援產出四段式交接檔並自動登錄 Obsidian 待辦清單，接續則僅由 `/handoff resume` 明確觸發。
 license: MIT
 allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git log:*), Bash(git stash list:*), Bash(python3 *handoff-manager.py*)
 argument-hint: "[resume <issue|branch> | list | complete | output-file-path]"
@@ -18,7 +18,7 @@ metadata:
 ## 兩條核心運作路徑
 
 1. **產出交接（Handoff 模式）**：使用者說「交接」「換視窗」「上下文快滿了」「總結進度」或輸入 `/handoff` 時執行。
-2. **接續交接（Resume 模式）**：使用者說「繼續 issue #xxx」「接手 issue #xxx」或輸入 `/handoff resume` 時執行。
+2. **接續交接（Resume 模式）**：僅在使用者輸入 `/handoff resume` 時執行（不以自然語句觸發）。
 
 ---
 
@@ -68,15 +68,15 @@ python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" record /tmp/cu
 • 交接檔案：~/.claude/handoffs/<repo>__<branch>.md
 • 下一步驟：<Next Step 1 一句話>
 • Obsidian：已新增至待辦清單
-
-您可直接關閉此視窗。新視窗開啟後輸入「繼續 issue #<num>」即可接手！
 ```
+
+> 不要附「新視窗輸入『繼續 issue #<num>』即可接手」這類提示；使用者習慣直接貼交接檔路徑給新 agent。
 
 ---
 
 ## 模式二：接續上一棒（Resume）
 
-當使用者說「繼續 issue #xxx」、「接手 issue #xxx」、「做這個 handoff」或輸入 `/handoff resume [query]` 時：
+當使用者輸入 `/handoff resume [query]` 時：
 
 1. **讀取交接內容**：
    執行腳本取得對應交接檔案：
