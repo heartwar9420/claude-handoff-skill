@@ -307,39 +307,16 @@ def cmd_resume(args):
         sys.exit(1)
 
 
-def cmd_complete(args):
-    repo_name, current_branch = get_git_info()
-    query = args.query or current_branch
-    issue_num = extract_issue_num(query)
+def mark_note_done(vault_path, issue_num, query):
+    """Fill done_date on the handoff note and drop its line from Todo/待辦清單.md.
 
-    # 1. Delete matching handoff files
-    deleted = []
-    if HANDOFF_DIR.exists():
-        # Match current branch slug
-        branch_slug = query.replace("/", "--").replace(" ", "-")
-        exact_file = HANDOFF_DIR / f"{repo_name}__{branch_slug}.md"
-        if exact_file.exists():
-            exact_file.unlink()
-            deleted.append(exact_file.name)
-
-        if issue_num:
-            candidates = list(HANDOFF_DIR.glob(f"{repo_name}__*{issue_num}*.md"))
-            if not candidates:
-                candidates = list(HANDOFF_DIR.glob(f"*{issue_num}*.md"))
-            for f in candidates:
-                if f.exists():
-                    f.unlink()
-                    deleted.append(f.name)
-
-    if deleted:
-        print(f"已清理交接檔案：{', '.join(set(deleted))}")
-    else:
-        print("未發現需清理的交接檔案。")
-
-    # 2. Mark the linked note's done_date, then drop its line from Todo/待辦清單.md —
+    Shared by `complete` (task finished) and `claim` (new agent took over).
+    Idempotent: done_date is only filled when empty, and the todo line is only
+    removed when still present.
+    """
+    # Mark the linked note's done_date, then drop its line from Todo/待辦清單.md —
     # this mirrors what the vault's own auto-done-date plugin does when a box is checked
     # by hand, and lets auto-move-done relocate the note into Todo/已完成/<date>/.
-    vault_path = Path(args.vault) if args.vault else DEFAULT_VAULT
     todo_file = vault_path / "Todo" / "待辦清單.md"
 
     if todo_file.exists():
@@ -384,6 +361,111 @@ def cmd_complete(args):
                 print("Obsidian 待辦清單中未找到對應的未完成 handoff 項目（或已是完成狀態）。")
         except Exception as e:
             print(f"更新 Obsidian 待辦清單時發生錯誤：{e}", file=sys.stderr)
+
+
+def cmd_complete(args):
+    repo_name, current_branch = get_git_info()
+    query = args.query or current_branch
+    issue_num = extract_issue_num(query)
+
+    # 1. Delete matching handoff files
+    deleted = []
+    if HANDOFF_DIR.exists():
+        # Match current branch slug
+        branch_slug = query.replace("/", "--").replace(" ", "-")
+        exact_file = HANDOFF_DIR / f"{repo_name}__{branch_slug}.md"
+        if exact_file.exists():
+            exact_file.unlink()
+            deleted.append(exact_file.name)
+
+        if issue_num:
+            candidates = list(HANDOFF_DIR.glob(f"{repo_name}__*{issue_num}*.md"))
+            if not candidates:
+                candidates = list(HANDOFF_DIR.glob(f"*{issue_num}*.md"))
+            for f in candidates:
+                if f.exists():
+                    f.unlink()
+                    deleted.append(f.name)
+
+    if deleted:
+        print(f"已清理交接檔案：{', '.join(set(deleted))}")
+    else:
+        print("未發現需清理的交接檔案。")
+
+    # 2. Mark the note done and drop it from the todo list.
+    vault_path = Path(args.vault) if args.vault else DEFAULT_VAULT
+    mark_note_done(vault_path, issue_num, query)
+
+
+def branch_from_slug(slug):
+    # record() turns "/" into "--" for the filename; undo it to recover the branch.
+    return slug.replace("--", "/")
+
+
+def claim_handoff_file(f, vault_path):
+    """Tick a handoff off the todo list WITHOUT deleting the handoff file.
+
+    The file stays so a crashed new session can be re-fed; `complete` removes it.
+    """
+    branch = branch_from_slug(f.stem.split("__", 1)[1]) if "__" in f.stem else f.stem
+    issue_num = extract_issue_num(branch, f.read_text(encoding="utf-8"))
+    print(f"[handoff claim] {f.name}")
+    mark_note_done(vault_path, issue_num, branch)
+
+
+def cmd_claim(args):
+    repo_name, current_branch = get_git_info()
+    query = args.query or current_branch
+    vault_path = Path(args.vault) if args.vault else DEFAULT_VAULT
+    matches = []
+    if HANDOFF_DIR.exists():
+        num = extract_issue_num(query)
+        matches = list(HANDOFF_DIR.glob(f"*__{query.replace('/', '--')}.md"))
+        if not matches and num:
+            matches = list(HANDOFF_DIR.glob(f"*__*{num}*.md"))
+    if not matches:
+        print(f"查無符合的交接檔案（搜尋：{query}）。", file=sys.stderr)
+        sys.exit(1)
+    for f in matches:
+        claim_handoff_file(f, vault_path)
+
+
+def cmd_hook_claim(args):
+    """UserPromptSubmit hook: if the prompt carries a pasted handoff, claim it.
+
+    Reads hook JSON from stdin. Never fails the prompt (always exits 0) and
+    prints nothing when the prompt has no handoff.
+    """
+    import json
+
+    try:
+        prompt = json.load(sys.stdin).get("prompt", "") or ""
+    except Exception:
+        return
+    if not prompt or not HANDOFF_DIR.exists():
+        return
+
+    vault_path = DEFAULT_VAULT
+    claimed = []
+    for f in HANDOFF_DIR.glob("*.md"):
+        try:
+            content = f.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        # Signals: the file name/path was pasted, or a distinctive chunk of its content was.
+        if f.name in prompt or (len(content) >= 80 and content[:200] in prompt):
+            claimed.append(f)
+    # Also accept a pasted Obsidian note name: "issue -<num> handoff".
+    for m in re.finditer(r"issue -(\d+) handoff", prompt):
+        for f in HANDOFF_DIR.glob(f"*__*{m.group(1)}*.md"):
+            if f not in claimed:
+                claimed.append(f)
+
+    for f in claimed:
+        try:
+            claim_handoff_file(f, vault_path)
+        except Exception as e:
+            print(f"[handoff claim] 失敗 {f.name}: {e}", file=sys.stderr)
 
 
 def cmd_list(args):
@@ -433,6 +515,14 @@ def main():
     p_com.add_argument("query", nargs="?", help="Issue number or branch name")
     p_com.add_argument("--vault", help="Path to Obsidian vault")
 
+    # claim: new agent took over -> tick + move to done, keep the handoff file
+    p_cla = subparsers.add_parser("claim", help="Mark handoff as taken over (keeps the file)")
+    p_cla.add_argument("query", nargs="?", help="Issue number or branch name")
+    p_cla.add_argument("--vault", help="Path to Obsidian vault")
+
+    # hook-claim: UserPromptSubmit hook entry (reads hook JSON from stdin)
+    subparsers.add_parser("hook-claim", help="Hook entry: claim handoffs found in the prompt")
+
     # list
     subparsers.add_parser("list", help="List all pending handoffs")
 
@@ -443,6 +533,10 @@ def main():
         cmd_resume(args)
     elif args.action == "complete":
         cmd_complete(args)
+    elif args.action == "claim":
+        cmd_claim(args)
+    elif args.action == "hook-claim":
+        cmd_hook_claim(args)
     elif args.action == "list":
         cmd_list(args)
 

@@ -92,6 +92,19 @@ python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" record /tmp/cu
 
 ---
 
+## 模式二之一：接手自動打勾（Claim，由 hook 觸發）
+
+使用者把交接檔路徑、交接檔內容或 Obsidian 筆記名（`issue -<num> handoff`）貼給新 agent 時，`UserPromptSubmit` hook 會自動執行：
+```bash
+python3 "$HOME/.claude/skills/handoff/scripts/handoff-manager.py" hook-claim
+```
+- 補上筆記 `done_date`、移除待辦清單那行，交給 `auto-move-done` 搬進 `Todo/已完成/<日期>/`。
+- **不刪 `~/.claude/handoffs/` 的交接檔**，新 session 當掉時還能重貼；刪檔留給模式三的 `complete`。
+- 手動補跑：`handoff-manager.py claim [issue|branch]`。重複執行無副作用。
+- 看到 hook 輸出 `[handoff claim] ...` 代表已自動處理，不要再手動 complete。
+
+---
+
 ## 模式三：任務完成清理（Complete）
 
 當該交接任務實作完成並開啟 PR（`gh pr create`）或使用者明確指示「完成了」時：
